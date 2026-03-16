@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "biblical-lm"
+version = "0.1.0"
+description = "GPT pre-training from scratch on Biblical text"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.3.0",
+    "numpy>=1.26.0",
+    "pydantic>=2.0.0",
+    "tokenizers>=0.19.0",
+    "wandb>=0.17.0",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "tqdm>=4.66.0",
+    "gradio>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+    "matplotlib>=3.8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/biblical_lm"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]

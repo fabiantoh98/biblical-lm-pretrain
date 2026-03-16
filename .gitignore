@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data — raw and processed corpus files are large and reproducible via scripts
+data/raw/
+data/processed/
+data/tokenizer/
+
+# Checkpoints — large binary files, not suitable for git
+outputs/checkpoints/
+
+# Generated samples — reproducible via generate.py
+outputs/samples/
+
+# W&B run logs
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
