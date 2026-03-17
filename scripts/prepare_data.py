@@ -1,12 +1,15 @@
 """Tokenize the corpus and write train/val binary files.
 
+Which datasets are included is controlled by DataConfig in
+src/biblical_lm/config.py. Set the relevant flags there, then re-run this
+script to rebuild train.bin and val.bin.
+
 Pipeline:
-  1. Load ASV text split into one document per Bible book.
-  2. Load each Matthew Henry volume as one document.
-  3. Tokenize each document and append an EOS token.
-  4. Shuffle all documents at the document level (reproducible via seed).
-  5. Split 90/10 train/val at the document boundary.
-  6. Concatenate and write as uint16 numpy memmap binary files.
+  1. Load documents for each enabled dataset.
+  2. Tokenize each document and append an EOS token.
+  3. Shuffle all documents at the document level (reproducible via seed).
+  4. Split 90/10 train/val at the document boundary.
+  5. Concatenate and write as uint16 numpy memmap binary files.
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ from pathlib import Path
 import numpy as np
 from tokenizers import Tokenizer
 from tqdm import tqdm
+
+from biblical_lm.config import DataConfig
 
 RAW_DIR = Path("data/raw")
 PROCESSED_DIR = Path("data/processed")
@@ -38,25 +43,85 @@ def load_asv_by_book(asv_path: Path) -> list[str]:
         List of book text strings (up to 66 entries).
     """
     text = asv_path.read_text(encoding="utf-8")
-    books = [block.strip() for block in text.split("\n\n") if block.strip()]
-    return books
+    return [block.strip() for block in text.split("\n\n") if block.strip()]
 
 
-def load_matthew_henry_volumes(mh_dir: Path) -> list[str]:
-    """Load each Matthew Henry volume as a single document string.
+def load_txt_dir(directory: Path, pattern: str = "*.txt") -> list[str]:
+    """Load all .txt files from a directory, one document per file.
 
     Args:
-        mh_dir: Directory containing vol_1.txt through vol_6.txt.
+        directory: Directory to scan for text files.
+        pattern: Glob pattern for file matching.
 
     Returns:
-        List of volume text strings.
+        List of document strings, one per file found.
     """
     docs: list[str] = []
-    for vol_path in sorted(mh_dir.glob("vol_*.txt")):
-        text = vol_path.read_text(encoding="utf-8").strip()
+    for path in sorted(directory.glob(pattern)):
+        text = path.read_text(encoding="utf-8").strip()
         if text:
             docs.append(text)
     return docs
+
+
+def load_all_documents(data_config: DataConfig, raw_dir: Path) -> list[str]:
+    """Load all enabled corpus documents according to DataConfig flags.
+
+    Args:
+        data_config: DataConfig instance controlling which datasets to include.
+        raw_dir: Root directory for raw text files (data/raw/).
+
+    Returns:
+        Combined list of document strings from all enabled datasets.
+    """
+    all_docs: list[str] = []
+
+    if data_config.use_asv:
+        asv_path = raw_dir / "asv.txt"
+        if asv_path.exists():
+            docs = load_asv_by_book(asv_path)
+            print(f"  ASV: {len(docs)} book documents")
+            all_docs.extend(docs)
+        else:
+            print(f"  ASV: SKIPPED — {asv_path} not found")
+
+    if data_config.use_matthew_henry:
+        mh_dir = raw_dir / "matthew_henry"
+        if mh_dir.exists():
+            docs = load_txt_dir(mh_dir, "vol_*.txt")
+            print(f"  Matthew Henry: {len(docs)} volume documents")
+            all_docs.extend(docs)
+        else:
+            print(f"  Matthew Henry: SKIPPED — {mh_dir} not found")
+
+    if data_config.use_calvin:
+        calvin_dir = raw_dir / "calvin"
+        if calvin_dir.exists():
+            docs = load_txt_dir(calvin_dir)
+            print(f"  Calvin: {len(docs)} documents")
+            all_docs.extend(docs)
+        else:
+            print(f"  Calvin: SKIPPED — {calvin_dir} not found (run download_data.py)")
+
+    if data_config.use_spurgeon:
+        spurgeon_dir = raw_dir / "spurgeon"
+        if spurgeon_dir.exists():
+            docs = load_txt_dir(spurgeon_dir)
+            print(f"  Spurgeon: {len(docs)} documents")
+            all_docs.extend(docs)
+        else:
+            print(f"  Spurgeon: SKIPPED — {spurgeon_dir} not found (run download_data.py)")
+
+    if data_config.use_augustine:
+        augustine_dir = raw_dir / "augustine"
+        if augustine_dir.exists():
+            docs = load_txt_dir(augustine_dir)
+            print(f"  Augustine: {len(docs)} documents")
+            all_docs.extend(docs)
+        else:
+            print(f"  Augustine: SKIPPED — {augustine_dir} not found (run download_data.py)")
+
+    return all_docs
 
 
 def tokenize_documents(
@@ -101,20 +166,26 @@ def write_bin(token_lists: list[list[int]], output_path: Path) -> int:
 
     fp = np.memmap(str(output_path), dtype=np.uint16, mode="w+", shape=(len(arr),))
     fp[:] = arr
-    del fp  # flushes and closes the memmap
+    del fp
 
     return len(arr)
 
 
-def prepare_data(seed: int = 42) -> None:
+def prepare_data(data_config: DataConfig | None = None, seed: int = 42) -> None:
     """Run the full tokenization and binary file preparation pipeline.
 
     Args:
+        data_config: DataConfig controlling which datasets to include.
+            Defaults to DataConfig() which enables ASV and Matthew Henry.
         seed: Random seed for reproducible document-level shuffle.
 
     Raises:
-        FileNotFoundError: If tokenizer or raw corpus files are missing.
+        FileNotFoundError: If the tokenizer is missing.
+        RuntimeError: If no documents were loaded from any enabled dataset.
     """
+    if data_config is None:
+        data_config = DataConfig()
+
     if not TOKENIZER_PATH.exists():
         raise FileNotFoundError(
             f"{TOKENIZER_PATH} not found. Run scripts/train_tokenizer.py first."
@@ -125,16 +196,15 @@ def prepare_data(seed: int = 42) -> None:
     eos_token_id: int = config["eos_token_id"]
     print(f"Loaded tokenizer — vocab_size={tokenizer.get_vocab_size()}, eos_id={eos_token_id}")
 
-    print("Loading ASV by book ...")
-    asv_docs = load_asv_by_book(RAW_DIR / "asv.txt")
-    print(f"  {len(asv_docs)} ASV book documents")
+    print("\nEnabled datasets:")
+    all_docs = load_all_documents(data_config, RAW_DIR)
 
-    print("Loading Matthew Henry volumes ...")
-    mh_docs = load_matthew_henry_volumes(RAW_DIR / "matthew_henry")
-    print(f"  {len(mh_docs)} Matthew Henry volume documents")
+    if not all_docs:
+        raise RuntimeError(
+            "No documents loaded. Check DataConfig flags and run download_data.py."
+        )
 
-    all_docs = asv_docs + mh_docs
-    print(f"Total documents before shuffle: {len(all_docs)}")
+    print(f"\nTotal documents before shuffle: {len(all_docs)}")
 
     random.seed(seed)
     random.shuffle(all_docs)
@@ -144,7 +214,7 @@ def prepare_data(seed: int = 42) -> None:
     val_docs = all_docs[split_idx:]
     print(f"Split: {len(train_docs)} train docs, {len(val_docs)} val docs")
 
-    print("Tokenizing train split ...")
+    print("\nTokenizing train split ...")
     train_tokens = tokenize_documents(train_docs, tokenizer, eos_token_id)
     print("Tokenizing val split ...")
     val_tokens = tokenize_documents(val_docs, tokenizer, eos_token_id)

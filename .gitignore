@@ -9,6 +9,7 @@ build/
 
 # Data — raw and processed corpus files are large and reproducible via scripts
 data/raw/
+data/.asv_cache
 data/processed/
 data/tokenizer/
 

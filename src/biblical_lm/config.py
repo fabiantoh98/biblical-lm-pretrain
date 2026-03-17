@@ -1,4 +1,4 @@
-"""Configuration dataclasses for model architecture and training hyperparameters."""
+"""Configuration dataclasses for model architecture, training, and data hyperparameters."""
 
 from __future__ import annotations
 
@@ -103,3 +103,29 @@ class TrainingConfig(BaseModel):
     def from_dict(cls, data: dict[str, Any]) -> TrainingConfig:
         """Reconstruct config from a checkpoint dict."""
         return cls(**data)
+
+
+class DataConfig(BaseModel):
+    """Controls which corpus datasets are included in data preparation.
+
+    Each flag maps to a subdirectory under data/raw/. Set a flag to False
+    to exclude that dataset without re-downloading it. After changing any
+    flag, re-run scripts/prepare_data.py to rebuild train.bin and val.bin,
+    then re-run scripts/train_tokenizer.py if the active corpus changes
+    significantly.
+
+    Attributes:
+        use_asv: American Standard Version Bible (data/raw/asv.txt).
+        use_matthew_henry: Matthew Henry's Complete Commentary (data/raw/matthew_henry/).
+        use_calvin: Calvin's Institutes + Commentaries (data/raw/calvin/).
+        use_spurgeon: Spurgeon's sermons and devotionals (data/raw/spurgeon/).
+        use_augustine: Augustine's Confessions, City of God, etc. (data/raw/augustine/).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    use_asv: bool = True
+    use_matthew_henry: bool = True
+    use_calvin: bool = True
+    use_spurgeon: bool = True
+    use_augustine: bool = True

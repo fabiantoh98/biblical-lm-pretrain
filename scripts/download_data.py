@@ -1,4 +1,16 @@
-"""Download ASV Bible and Matthew Henry commentary from public domain sources."""
+"""Download all corpus datasets from public domain sources.
+
+Datasets:
+  ASV Bible         — GitHub (openbibleinfo/American-Standard-Version-Bible)
+  Matthew Henry     — CCEL (ccel.org/ccel/henry), 6 volumes
+  Calvin            — CCEL (ccel.org/ccel/calvin), Institutes + Commentaries
+  Spurgeon          — CCEL (ccel.org/ccel/spurgeon), sermons and devotionals
+  Augustine         — CCEL (ccel.org/ccel/augustine), Confessions, City of God, etc.
+
+All sources are public domain. Running this script downloads everything to
+data/raw/. Use DataConfig in config.py to control which datasets are included
+when running scripts/prepare_data.py.
+"""
 
 from __future__ import annotations
 
@@ -46,7 +58,74 @@ MATTHEW_HENRY_VOLUMES: list[tuple[int, str, str]] = [
     (6, "mhc6", "Acts to Revelation"),
 ]
 
-CCEL_URL_PATTERN = "https://ccel.org/ccel/h/henry/{slug}/cache/{slug}.txt"
+CCEL_MH_URL = "https://ccel.org/ccel/h/henry/{slug}/cache/{slug}.txt"
+
+# Extra datasets from CCEL. Each entry is (filename_stem, description, url).
+# Files are saved as data/raw/{dataset_name}/{filename_stem}.txt
+CALVIN_WORKS: list[tuple[str, str, str]] = [
+    (
+        "institutes",
+        "Institutes of the Christian Religion",
+        "https://ccel.org/ccel/c/calvin/institutes/cache/institutes.txt",
+    ),
+]
+
+# Calvin's Commentaries are split into 46 individual volumes on CCEL.
+# The "commentaries" meta-file is just a table of contents — each volume
+# must be downloaded separately as calcom01.txt through calcom46.txt.
+# Volumes are saved as data/raw/calvin/calcom_NN.txt.
+CALVIN_COMMENTARY_COUNT = 46
+
+SPURGEON_WORKS: list[tuple[str, str, str]] = [
+    (
+        "morning_evening",
+        "Morning and Evening",
+        "https://ccel.org/ccel/s/spurgeon/morneve/cache/morneve.txt",
+    ),
+    (
+        "treasury_1",
+        "Treasury of David Vol 1",
+        "https://ccel.org/ccel/s/spurgeon/treasury1/cache/treasury1.txt",
+    ),
+    (
+        "treasury_2",
+        "Treasury of David Vol 2",
+        "https://ccel.org/ccel/s/spurgeon/treasury2/cache/treasury2.txt",
+    ),
+    (
+        "treasury_3",
+        "Treasury of David Vol 3",
+        "https://ccel.org/ccel/s/spurgeon/treasury3/cache/treasury3.txt",
+    ),
+    (
+        "all_of_grace",
+        "All of Grace",
+        "https://ccel.org/ccel/s/spurgeon/grace/cache/grace.txt",
+    ),
+    (
+        "faith_checkbook",
+        "Faith's Checkbook",
+        "https://ccel.org/ccel/s/spurgeon/checkbook/cache/checkbook.txt",
+    ),
+]
+
+AUGUSTINE_WORKS: list[tuple[str, str, str]] = [
+    (
+        "confessions",
+        "Confessions",
+        "https://ccel.org/ccel/a/augustine/confess/cache/confess.txt",
+    ),
+    (
+        "city_of_god",
+        "City of God",
+        "https://ccel.org/s/schaff/npnf102/cache/npnf102.txt",
+    ),
+    (
+        "christian_doctrine",
+        "On Christian Doctrine",
+        "https://ccel.org/ccel/a/augustine/doctrine/cache/doctrine.txt",
+    ),
+]
 
 HEADERS = {"User-Agent": "biblical-lm-pretrain/1.0 (academic research)"}
 REQUEST_DELAY_SECONDS = 1
@@ -138,6 +217,11 @@ def download_asv(output_path: Path) -> None:
     book_texts: list[str] = []
     failed: list[str] = []
 
+    asv_cache = output_path.parent / ".asv_cache"
+    if output_path.exists() and asv_cache.exists():
+        print(f"  Skipping ASV — already downloaded at {output_path}")
+        return
+
     for filename in ASV_USX_FILES:
         url = ASV_BASE_URL + filename
         print(f"  Downloading {filename} ...", end=" ", flush=True)
@@ -156,6 +240,7 @@ def download_asv(output_path: Path) -> None:
             f.write(text)
             f.write("\n\n")
 
+    asv_cache.touch()  # sentinel file so subsequent runs skip the download
     print(f"\nASV: {len(book_texts)} books saved to {output_path}")
     if failed:
         print(f"  Failed books: {failed}")
@@ -175,14 +260,18 @@ def download_matthew_henry(output_dir: Path) -> None:
     failures: list[tuple[int, str]] = []
 
     for vol_num, slug, description in MATTHEW_HENRY_VOLUMES:
-        url = CCEL_URL_PATTERN.format(slug=slug)
+        output_path = output_dir / f"vol_{vol_num}.txt"
+        if output_path.exists():
+            print(f"  Skipping Vol {vol_num} ({description}) — already downloaded")
+            successes.append((vol_num, description))
+            continue
+        url = CCEL_MH_URL.format(slug=slug)
         print(f"Downloading Matthew Henry Vol {vol_num} ({description}) ...")
         print(f"  {url}")
         try:
             response = requests.get(url, headers=HEADERS, timeout=120)
             response.raise_for_status()
             text = response.text.strip()
-            output_path = output_dir / f"vol_{vol_num}.txt"
             output_path.write_text(text, encoding="utf-8")
             print(f"  Saved {len(text):,} chars ({output_path.stat().st_size // 1024}KB)")
             successes.append((vol_num, description))
@@ -200,7 +289,107 @@ def download_matthew_henry(output_dir: Path) -> None:
         print("  Save each as data/raw/matthew_henry/vol_N.txt")
 
 
+def download_ccel_dataset(
+    works: list[tuple[str, str, str]],
+    output_dir: Path,
+    dataset_name: str,
+) -> None:
+    """Download a set of CCEL plain text works into a named subdirectory.
+
+    Args:
+        works: List of (filename_stem, description, url) tuples.
+        output_dir: Directory to save the downloaded files.
+        dataset_name: Human-readable name for progress output.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    successes: list[str] = []
+    failures: list[str] = []
+
+    for filename_stem, description, url in works:
+        output_path = output_dir / f"{filename_stem}.txt"
+        if output_path.exists():
+            print(f"  Skipping {description} — already downloaded")
+            successes.append(description)
+            continue
+        print(f"Downloading {dataset_name} — {description} ...")
+        print(f"  {url}")
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=120)
+            response.raise_for_status()
+            text = response.text.strip()
+            output_path.write_text(text, encoding="utf-8")
+            size_kb = output_path.stat().st_size // 1024
+            print(f"  Saved {len(text):,} chars ({size_kb}KB) to {output_path}")
+            successes.append(description)
+        except Exception as exc:
+            print(f"  FAILED: {exc}")
+            failures.append(description)
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    print(f"\n{dataset_name}: {len(successes)}/{len(works)} works downloaded.")
+    if failures:
+        print(f"  Failed: {failures}")
+
+
+def download_calvin_commentaries(output_dir: Path, n_volumes: int = CALVIN_COMMENTARY_COUNT) -> None:
+    """Download Calvin's Commentary volumes from CCEL.
+
+    The CCEL "commentaries" meta-file is just a table of contents linking to
+    46 individual volumes (calcom01–calcom46). This function fetches each
+    volume separately and saves it as calcom_NN.txt. Volumes that return a
+    404 or suspiciously small response (<10 KB) are skipped with a warning.
+
+    Args:
+        output_dir: Directory to save the volume text files.
+        n_volumes: Number of volumes to attempt (default 46).
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Remove the stale TOC-only file if present
+    stale = output_dir / "commentaries.txt"
+    if stale.exists() and stale.stat().st_size < 10_000:
+        stale.unlink()
+        print("  Removed stale commentaries.txt (was a table of contents, not text)")
+
+    successes: list[int] = []
+    failures: list[int] = []
+
+    for n in range(1, n_volumes + 1):
+        slug = f"calcom{n:02d}"
+        output_path = output_dir / f"calcom_{n:02d}.txt"
+        if output_path.exists():
+            print(f"  Skipping Calvin Commentary vol {n:02d} — already downloaded")
+            successes.append(n)
+            continue
+        url = f"https://ccel.org/ccel/c/calvin/{slug}/cache/{slug}.txt"
+        print(f"Downloading Calvin Commentary vol {n:02d} ({slug}) ...")
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=120)
+            response.raise_for_status()
+            text = response.text.strip()
+            if len(text) < 10_000:
+                print(f"  SKIPPED vol {n:02d} — response too small ({len(text)} chars), likely a 404 page")
+                failures.append(n)
+                time.sleep(REQUEST_DELAY_SECONDS)
+                continue
+            output_path.write_text(text, encoding="utf-8")
+            size_kb = output_path.stat().st_size // 1024
+            print(f"  Saved {len(text):,} chars ({size_kb}KB) to {output_path}")
+            successes.append(n)
+        except Exception as exc:
+            print(f"  FAILED vol {n:02d}: {exc}")
+            failures.append(n)
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    print(f"\nCalvin Commentaries: {len(successes)}/{n_volumes} volumes downloaded.")
+    if failures:
+        print(f"  Skipped/failed volumes: {failures}")
+
+
 if __name__ == "__main__":
     download_asv(RAW_DIR / "asv.txt")
     download_matthew_henry(MH_DIR)
-    print("\nData download complete.")
+    download_ccel_dataset(CALVIN_WORKS, RAW_DIR / "calvin", "Calvin")
+    download_calvin_commentaries(RAW_DIR / "calvin")
+    download_ccel_dataset(SPURGEON_WORKS, RAW_DIR / "spurgeon", "Spurgeon")
+    download_ccel_dataset(AUGUSTINE_WORKS, RAW_DIR / "augustine", "Augustine")
+    print("\nAll downloads complete.")
